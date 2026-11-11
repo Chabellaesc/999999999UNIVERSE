@@ -2034,13 +2034,23 @@ function presionarEscena5() {
 //  set de Ultra Miami.
 // ============================================================
 
+// Datos del dúo que pasan en la pancarta del avión
+// (la cita de Carlo viene de la entrevista, traducida del inglés)
 const datosDuo = [
   "Vienen de Venecia, Italia",
   "Empezaron en julio de 2016",
   "\"300000003\" (2018): su gran hit",
   "Su sello: NineTimesNine",
   "Sets en vivo solo con máquinas",
-  "Carlo Braidotti y Giovanni Calvani"
+  "Carlo Braidotti y Giovanni Calvani",
+  "Se pronuncia \"nine times nine\"",
+  "Sus sets en vivo son 100 % improvisados",
+  "Nunca estudiaron música: aprendieron con sintetizadores",
+  "Han tocado varias veces en Tomorrowland",
+  "Rave 4 Love: más de 9,7 millones de plays en Spotify",
+  "Están a la vanguardia del hard techno",
+  "Se inspiran en el acid techno de los años 90",
+  "\"300000003 siempre tendrá un lugar especial para mí\" — Carlo"
 ];
 const partesSet = ["Parte 1", "Parte 2", "Parte 3"];
 let parteElegida = 0;
@@ -2185,11 +2195,19 @@ function dibujarSolYLuna(h) {
 }
 
 function dibujarAvion() {
-  let recorrido = ANCHO + 700;
-  let x = (millis() * 0.08) % recorrido - 200; // cruza de izquierda a derecha y vuelve a empezar
+  // recorrido largo para que alcance a salir hasta la pancarta más larga
+  let recorrido = ANCHO + 1100;
+  let avance = millis() * 0.08;
+  let x = avance % recorrido - 200; // cruza de izquierda a derecha y vuelve a empezar
   let y = 150;
-  let dato = datosDuo[minute() % datosDuo.length]; // cada minuto cambia el dato
-  let anchoPancarta = 330;
+  // cada vez que el avión vuelve a pasar, trae un dato nuevo
+  let vuelta = floor(avance / recorrido);
+  let dato = datosDuo[vuelta % datosDuo.length];
+
+  // la pancarta se ajusta al largo de cada frase
+  textStyle(BOLD);
+  textSize(15);
+  let anchoPancarta = textWidth(dato) + 34;
 
   // cuerda y pancarta (van detrás del avión)
   stroke(blanco);
@@ -2200,8 +2218,6 @@ function dibujarAvion() {
   rect(x - 90 - anchoPancarta, y - 18, anchoPancarta, 36, 4);
   fill(rojo);
   textAlign(CENTER, CENTER);
-  textStyle(BOLD);
-  textSize(15);
   text(dato, x - 90 - anchoPancarta / 2, y);
   textStyle(NORMAL);
 
