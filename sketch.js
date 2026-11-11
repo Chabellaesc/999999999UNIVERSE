@@ -15,10 +15,16 @@
  * Desde cualquier escena (2 a 6) el botón "9" de arriba a la izquierda
  * lleva de vuelta a la consola.
  *
- * Por ahora todo se dibuja con figuras de p5.js (todavía sin imágenes).
- * La música aún no está: usamos un "pulso simulado" a 140 BPM para que
- * todo se mueva como si sonara. Donde dice  // SONIDO:  es donde después
- * va el código de p5.sound (loadSound, Amplitude, FFT, volumen).
+ * MÚSICA (p5.sound para p5 2):
+ *  - Las canciones se cargan con  await loadSound()  en setup.
+ *  - Cada canción se conecta al FFT y a la Amplitude con  cancion.connect(...)
+ *  - analizarMusica() corre en cada cuadro y calcula:
+ *      pulso   → los golpes del bajo (de 0 a 1)  → todo lo que salta y late
+ *      agudos  → la energía de los agudos (de 0 a 1) → los láseres
+ *      nivel   → el volumen general (Amplitude) → el anillo del tocadiscos
+ *  - El volumen se cambia con  cancion.amp(valor)
+ *  - Los navegadores no dejan sonar nada sin un clic: por eso hay una
+ *    pantalla de entrada que activa el audio con userStartAudio().
  */
 
 // ============================================================
@@ -39,9 +45,28 @@ const nombresEscenas = ["", "La consola", "El tocadiscos", "La mezcla", "La gira
 // Paleta del moodboard (se crean en setup porque color() necesita p5 listo)
 let rojo, verde, negro, blanco;
 
-// SONIDO: aquí irán las variables de sonido, por ejemplo:
-// let cancionInicio, canciones = [], stems = [], alarma, cancionRave, partesUltra = [];
-// let amplitud, fft;
+// ---- SONIDO ----
+const RUTA_SONIDOS = "assets/sonidos/";
+let cancionInicio;      // X0004000X (la consola)
+let kickBajo;           // golpe de los 4 pads decorativos
+let alarma;             // Alarm 303 (la gira)
+let cancionRave;        // Acid World (the real rave)
+let partesUltra = [];   // las 3 partes del set de Ultra (the festival)
+// (las 5 canciones de los vinilos se guardan dentro de cada vinilo: vinilo.cancion)
+
+let amplitud;           // mide el volumen general
+let fft;                // separa el sonido en frecuencias (bajos, medios, agudos)
+let audioActivado = false; // se vuelve true con el primer clic
+let musicaCargada = false; // se vuelve true cuando terminan de cargar todos los audios
+
+// resultados del análisis (se actualizan en cada cuadro)
+let pulso = 0;
+let agudos = 0;
+let nivel = 0;
+let promedioBajos = -100; // promedio lento de los bajos, para detectar los golpes
+
+// Sensibilidad: si algo salta muy poco, baja este número; si salta demasiado, súbelo
+const SENSIBILIDAD_BAJOS = 6;
 
 // FUENTES: más adelante se cargan las fuentes del moodboard (Acidic, Aero Matics Stencil)
 // let fuenteTitulos, fuenteTextos;
@@ -51,7 +76,7 @@ let rojo, verde, negro, blanco;
 //  SETUP Y DRAW
 // ============================================================
 
-function setup() {
+async function setup() {
   createCanvas(ANCHO, ALTO);
 
   rojo = color(224, 0, 0);
@@ -66,10 +91,71 @@ function setup() {
   crearRave();       // escena 5
   crearSet();        // escena 6
 
-  // SONIDO: amplitud = new p5.Amplitude();  fft = new p5.FFT();
+  // herramientas de análisis
+  amplitud = new p5.Amplitude(0.6); // 0.6 = suaviza un poco el valor
+  fft = new p5.FFT(1024);           // 1024 bandas: así se separan bien los bajos
+
+  await cargarMusica();
+}
+
+// Carga todos los audios, uno por uno, mostrando el progreso en pantalla
+async function cargarMusica() {
+  let total = 7 + vinilos.length; // 7 audios de las escenas + los de los vinilos
+  let cargados = 0;
+
+  cancionInicio = await cargarSonido("X0004000X.MP3", ++cargados, total);
+  kickBajo      = await cargarSonido("kickbajo.MP3", ++cargados, total);
+  alarma        = await cargarSonido("alarm303.MP3", ++cargados, total);
+  cancionRave   = await cargarSonido("acidworld.MP3", ++cargados, total);
+  partesUltra[0] = await cargarSonido("ultra_parte1.MP3", ++cargados, total);
+  partesUltra[1] = await cargarSonido("ultra_parte2.MP3", ++cargados, total);
+  partesUltra[2] = await cargarSonido("ultra_parte3.MP3", ++cargados, total);
+
+  for (let v of vinilos) {
+    v.cancion = await cargarSonido(v.archivoAudio, ++cargados, total);
+  }
+
+  // todas las canciones se repiten en loop (menos el golpe de los pads)
+  let enLoop = [cancionInicio, alarma, cancionRave, partesUltra[0], partesUltra[1], partesUltra[2]];
+  for (let v of vinilos) {
+    enLoop.push(v.cancion);
+  }
+  for (let s of enLoop) {
+    s.loop();
+  }
+  musicaCargada = true;
+}
+
+// Carga un audio y lo conecta al FFT y a la Amplitude para poder analizarlo
+async function cargarSonido(archivo, numero, total) {
+  // pantalla de carga: si se queda pegada en un archivo, ese nombre está mal escrito
+  background(negro);
+  noStroke();
+  fill(verde);
+  textAlign(CENTER, CENTER);
+  textStyle(BOLD);
+  textSize(40);
+  text("999999999", ANCHO / 2, ALTO / 2 - 40);
+  textStyle(NORMAL);
+  fill(blanco);
+  textSize(16);
+  text("Cargando música " + numero + " / " + total + "   (" + archivo + ")", ANCHO / 2, ALTO / 2 + 20);
+
+  let sonido = await loadSound(RUTA_SONIDOS + archivo);
+  sonido.connect(fft);
+  sonido.connect(amplitud);
+  return sonido;
 }
 
 function draw() {
+  // antes del primer clic: pantalla de entrada
+  if (!audioActivado) {
+    dibujarPantallaEntrada();
+    return;
+  }
+
+  analizarMusica(); // una vez por cuadro: calcula pulso, agudos y nivel
+
   // revisar qué escena está activa y pintarla (igual que el ejemplo de la profe)
   switch (escena) {
     case 0:
@@ -111,22 +197,107 @@ function irAEscena(numero) {
   escenaDestino = numero;
   escena = 0;
   inicioSeparador = millis();
-  // SONIDO: aquí se detiene la música de la escena que estamos dejando
+  detenerMusica(); // se calla la música de la escena que estamos dejando
 }
 
-// Pulso simulado: vale 1 justo en cada golpe del bombo y baja rápido a 0.
-// SONIDO: cuando tengamos la música, se cambia por amplitud.getLevel()
-// o por fft.getEnergy("bass") / 255
-function pulsoSimulado() {
-  let duracionGolpe = 60000 / BPM;                           // milisegundos entre golpes
-  let fase = (millis() % duracionGolpe) / duracionGolpe;     // va de 0 a 1 en cada golpe
-  return pow(1 - fase, 3);
+// ---------- PANTALLA DE ENTRADA ----------
+function dibujarPantallaEntrada() {
+  background(negro);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textStyle(BOLD);
+  fill(verde);
+  textSize(70);
+  text("999999999", ANCHO / 2, ALTO / 2 - 60);
+  textStyle(NORMAL);
+  fill(blanco);
+  textSize(22);
+  text("Detrás de la máquina", ANCHO / 2, ALTO / 2);
+  // el texto titila para invitar a hacer clic
+  fill(255, 150 + sin(millis() * 0.005) * 100);
+  textSize(16);
+  text("Haz clic para entrar al universo  ·  sube el volumen", ANCHO / 2, ALTO / 2 + 70);
 }
 
-// Agudos simulados: un valor entre 0 y 1 que cambia suave.
-// SONIDO: después será fft.getEnergy("treble") / 255
-function agudosSimulados() {
-  return noise(millis() * 0.002);
+// ---------- MÚSICA DE CADA ESCENA ----------
+
+// Empieza la música de la escena a la que acabamos de entrar
+function iniciarMusicaEscena(numero) {
+  if (numero == 1) {
+    cancionInicio.amp(0.5); // de fondo, a volumen más bajo
+    cancionInicio.play();
+  } else if (numero == 2) {
+    // si había un vinilo en el plato, vuelve a sonar
+    if (viniloSonando >= 0) {
+      reproducirVinilo(viniloSonando);
+    }
+  } else if (numero == 4) {
+    alarma.rate(1);
+    alarma.play();
+  } else if (numero == 5) {
+    cancionRave.play();
+  } else if (numero == 6) {
+    partesUltra[parteElegida].play();
+  }
+  // la escena 3 (la mezcla) no tiene música por ahora
+}
+
+// Detiene todo lo que esté sonando
+function detenerMusica() {
+  let todos = [cancionInicio, kickBajo, alarma, cancionRave, partesUltra[0], partesUltra[1], partesUltra[2]];
+  for (let v of vinilos) {
+    todos.push(v.cancion);
+  }
+  for (let s of todos) {
+    if (s && s.isPlaying()) {
+      s.stop();
+    }
+  }
+}
+
+// ---------- ANÁLISIS DE LA MÚSICA ----------
+
+// Promedio (en decibeles) de las bandas del FFT entre "desde" y "hasta".
+// fft.analyze() da un valor por banda; lo pasamos a decibeles con 20 * log10
+// porque así se parece más a como oímos (va más o menos de -100 a 0).
+function energia(espectro, desde, hasta) {
+  let suma = 0;
+  for (let i = desde; i <= hasta; i++) {
+    suma += 20 * Math.log10(max(espectro[i], 0.0000001));
+  }
+  return suma / (hasta - desde + 1);
+}
+
+function analizarMusica() {
+  let espectro = fft.analyze(); // 1024 bandas, cada una de unos 23 Hz
+
+  // BAJOS (bandas 2 a 6 ≈ 45 a 140 Hz: el bombo y el bajo)
+  let bajos = energia(espectro, 2, 6);
+  // Comparamos el bajo de AHORA con su promedio de los últimos instantes:
+  // cuando golpea el bombo, sube por encima del promedio → pulso alto.
+  promedioBajos = lerp(promedioBajos, bajos, 0.05);
+  let golpe = constrain(map(bajos - promedioBajos, 0, SENSIBILIDAD_BAJOS, 0, 1), 0, 1);
+  if (bajos < -90) {
+    golpe = 0; // silencio
+  }
+  // sube de golpe y baja suave (como el pulso simulado que teníamos antes)
+  pulso = max(golpe, pulso * 0.85);
+
+  // AGUDOS (bandas 170 a 500 ≈ 4.000 a 11.700 Hz: hi-hats, platillos, brillos)
+  let energiaAgudos = energia(espectro, 170, 500);
+  agudos = lerp(agudos, constrain(map(energiaAgudos, -90, -45, 0, 1), 0, 1), 0.2);
+
+  // VOLUMEN GENERAL con la Amplitude
+  nivel = constrain(map(amplitud.getLevel(), 0, 0.3, 0, 1), 0, 1);
+}
+
+// Las escenas piden el pulso y los agudos con estas funciones
+function pulsoMusica() {
+  return pulso;
+}
+
+function agudosMusica() {
+  return agudos;
 }
 
 // Título y frase de instrucción arriba de cada escena
@@ -206,7 +377,7 @@ function dibujarSeparador() {
     if (escena == 4) {
       reiniciarGira(); // el cronómetro del laberinto empieza al entrar
     }
-    // SONIDO: aquí empieza la música de la nueva escena
+    iniciarMusicaEscena(escena); // empieza la música de la nueva escena
   }
 }
 
@@ -246,7 +417,7 @@ function crearPads() {
 
 function dibujarEscena1() {
   background(rojo);
-  let pulso = pulsoSimulado();
+  let pulso = pulsoMusica();
 
   // siluetas de los dos DJs a los lados (mueven la cabeza con el ritmo)
   dibujarDJ(160, 470, "CARLO", pulso);
@@ -305,7 +476,7 @@ function dibujarEscena1() {
     text(pad.nombre, pad.x + pad.tam / 2, pad.y + pad.tam / 2);
   }
   textStyle(NORMAL);
-  // SONIDO: "09 09 1999" suena a volumen bajo en esta escena
+  // la música de fondo (X0004000X) se inicia en iniciarMusicaEscena(1)
 }
 
 // Silueta de un DJ. Cada uno tiene su cabeza propia:
@@ -416,7 +587,9 @@ function presionarEscena1() {
     if (mouseX > pad.x && mouseX < pad.x + pad.tam &&
         mouseY > pad.y && mouseY < pad.y + pad.tam) {
       pad.brillo = 255;
-      // SONIDO: aquí suena el golpe del pad
+      if (pad.destino == 0) {
+        kickBajo.play(); // los pads decorativos suenan con el kick
+      }
       if (pad.destino > 0) {
         irAEscena(pad.destino);
       }
@@ -443,12 +616,13 @@ let girandoPerilla = false;
 function crearVinilos() {
   // completar los años que faltan cuando estén confirmados
   // archivo: nombre EXACTO de la portada en assets/imagenes (las mayúsculas importan)
+  // audio: nombre EXACTO de la canción en assets/sonidos (también importan .MP3 / .mp3)
   let canciones = [
-    { titulo: "300000003", anio: "2018", archivo: "300000003.png" },
-    { titulo: "Rave 4 Love", anio: "2020", archivo: "Rave4love.png" },
-    { titulo: "Acid Blood", anio: "2025", archivo: "AcidBlood.png" },
-    { titulo: "I Got Acid", anio: "", archivo: "IGotAcid.png" },
-    { titulo: "IN MY HOUSE", anio: "", archivo: "InMyHouse.png" }
+    { titulo: "300000003", anio: "2018", archivo: "300000003.png", audio: "300000003.MP3" },
+    { titulo: "Rave 4 Love", anio: "2020", archivo: "Rave4love.png", audio: "rave4love.MP3" },
+    { titulo: "Acid Blood", anio: "2025", archivo: "AcidBlood.png", audio: "acidblood.MP3" },
+    { titulo: "I Got Acid", anio: "", archivo: "IGotAcid.png", audio: "igotacid.mp3" },
+    { titulo: "IN MY HOUSE", anio: "", archivo: "InMyHouse.png", audio: "inmyhouse.mp3" }
   ];
   let tonos = [verde, blanco, rojo, verde, blanco]; // color de respaldo si la portada no carga
 
@@ -459,6 +633,8 @@ function crearVinilos() {
       anio: canciones[i].anio,
       tono: tonos[i],
       portada: null, // aquí queda la portada recortada en círculo cuando cargue
+      archivoAudio: canciones[i].audio,
+      cancion: null, // aquí queda la canción cuando se cargue en setup
       x: 130,
       y: yCasa,
       xCasa: 130,   // posición a la que vuelve cuando se suelta
@@ -472,12 +648,24 @@ function crearVinilos() {
       vinilo.portada = recortarEnCirculo(img);
     });
   }
-  // SONIDO: canciones[i] = loadSound("assets/sonidos/300000003.mp3"), etc.
+  // las canciones se cargan después, en cargarMusica()
+}
+
+// Pone a sonar la canción de un vinilo (y calla la que estuviera sonando)
+function reproducirVinilo(indice) {
+  for (let v of vinilos) {
+    if (v.cancion.isPlaying()) {
+      v.cancion.stop();
+    }
+  }
+  let cancion = vinilos[indice].cancion;
+  cancion.amp(max(volumen, 0.001)); // el mínimo es 0.001 porque amp(0) puede dar problemas
+  cancion.play();
 }
 
 function dibujarEscena2() {
   let sonando = viniloSonando >= 0;
-  let bajos = sonando ? pulsoSimulado() : 0; // SONIDO: fft.getEnergy("bass") / 255
+  let bajos = sonando ? pulsoMusica() : 0; // golpes del bajo (FFT)
 
   // el fondo se oscurece con cada golpe de bajo
   background(lerpColor(rojo, color(70, 0, 0), bajos));
@@ -489,12 +677,12 @@ function dibujarEscena2() {
   fill(negro);
   rect(plato.x - 220, plato.y - 200, 440, 400, 20);
 
-  // anillo verde que crece con la amplitud
+  // anillo verde que crece con la amplitud (volumen general de la canción)
   if (sonando) {
     noFill();
     stroke(verde);
     strokeWeight(3);
-    circle(plato.x, plato.y, plato.radio * 2 + 30 + bajos * 50);
+    circle(plato.x, plato.y, plato.radio * 2 + 30 + nivel * 60);
   }
 
   // plato
@@ -557,7 +745,6 @@ function dibujarEscena2() {
     textSize(15);
     text("Sonando: " + vinilos[viniloSonando].titulo + "   (haz clic en el disco para quitarlo)", plato.x, 595);
   }
-  // SONIDO: cancion.setVolume(volumen)
 }
 
 // Recorta una imagen cuadrada en forma de círculo usando una máscara:
@@ -643,8 +830,8 @@ function presionarEscena2() {
   }
   // 2. ¿clic en el disco que suena? → se quita
   if (viniloSonando >= 0 && dist(mouseX, mouseY, plato.x, plato.y) < plato.radio) {
+    vinilos[viniloSonando].cancion.stop();
     viniloSonando = -1;
-    // SONIDO: cancion.stop()
     return;
   }
   // 3. ¿clic en un vinilo de la columna? → empieza a arrastrarse
@@ -661,6 +848,9 @@ function arrastrarEscena2() {
   if (girandoPerilla) {
     // subir el mouse sube el volumen, bajarlo lo baja
     volumen = constrain(volumen - (mouseY - pmouseY) * 0.005, 0, 1);
+    if (viniloSonando >= 0) {
+      vinilos[viniloSonando].cancion.amp(max(volumen, 0.001)); // 0.001 = casi en silencio
+    }
   }
   if (viniloArrastrado >= 0) {
     vinilos[viniloArrastrado].x = mouseX;
@@ -676,7 +866,7 @@ function soltarEscena2() {
     if (dist(v.x, v.y, plato.x, plato.y) < plato.radio) {
       viniloSonando = viniloArrastrado;
       anguloVinilo = 0;
-      // SONIDO: detener la canción anterior y reproducir canciones[viniloSonando]
+      reproducirVinilo(viniloSonando); // calla la anterior y suena la nueva
     }
     // el vinilo vuelve a su lugar en la columna (el que suena se dibuja en el plato)
     v.x = v.xCasa;
@@ -722,7 +912,7 @@ function crearMezcla() {
       carril: -1 // -1 = no está en ningún carril
     });
   }
-  // SONIDO: stems[i] = loadSound("assets/sonidos/stem_kick.mp3"), etc.
+  // (pendiente) stems[i] = loadSound("assets/sonidos/stem_kick.mp3"), etc.
 }
 
 // Dónde está una criatura: arrastrándose, en su carril o en su casa
@@ -890,7 +1080,7 @@ function presionarEscena3() {
       if (cr.carril >= 0) {
         carriles[cr.carril].ocupadoPor = -1;
         cr.carril = -1;
-        // SONIDO: stems[i].stop()
+        // (pendiente) stems[i].stop()
       }
       cr.x = mouseX;
       cr.y = mouseY;
@@ -917,7 +1107,7 @@ function soltarEscena3() {
     if (dentro && c.ocupadoPor == -1) {
       c.ocupadoPor = criaturaArrastrada;
       cr.carril = j;
-      // SONIDO: stems[criaturaArrastrada].loop()
+      // (pendiente) stems[criaturaArrastrada].loop()
     }
   }
   criaturaArrastrada = -1; // si no cayó en un carril libre, vuelve a su casa
@@ -1022,7 +1212,13 @@ function dibujarEscena4() {
   // mientras menos tiempo queda, más rojo se pone todo
   let urgencia = 1 - tiempoRestante / TIEMPO_LIMITE;
   background(lerpColor(negro, color(110, 0, 0), urgencia));
-  // SONIDO: alarma.rate(map(urgencia, 0, 1, 1, 1.4))  → "Alarm 303" se acelera
+
+  // "Alarm 303" se acelera mientras se acaba el tiempo (de velocidad 1 a 1.4)
+  if (estadoGira == "jugando") {
+    alarma.rate(map(urgencia, 0, 1, 1, 1.4));
+  } else if (alarma.isPlaying()) {
+    alarma.stop(); // cuando el juego termina, la alarma se calla
+  }
 
   dibujarTituloEscena("LA GIRA", "Usa las flechas: recoge los 9 pases y llega a la cabina (DJ) antes de que se acabe el tiempo");
 
@@ -1179,7 +1375,7 @@ function revisarFans() {
       protegidoHasta = millis() + 1500;    // 1,5 segundos sin poder chocar otra vez
       fan.fila = fan.filaInicio;           // el fan vuelve a su lugar
       fan.col = fan.colInicio;
-      // SONIDO: efecto de choque
+      // (pendiente) efecto de sonido de choque
     }
   }
 }
@@ -1188,7 +1384,7 @@ function revisarPases() {
   for (let p of pases) {
     if (!p.tomado && p.fila == jugador.fila && p.col == jugador.col) {
       p.tomado = true;
-      // SONIDO: efecto de recoger pase
+      // (pendiente) efecto de sonido al recoger un pase
     }
   }
 }
@@ -1202,6 +1398,10 @@ function revisarCabina() {
 function teclaEscena4() {
   if (key == "r" || key == "R") {
     reiniciarGira();
+    alarma.rate(1);
+    if (!alarma.isPlaying()) {
+      alarma.play(); // vuelve a sonar desde el principio
+    }
     return;
   }
   if (estadoGira != "jugando") {
@@ -1270,8 +1470,8 @@ function agregarAlien(x, y) {
 }
 
 function dibujarEscena5() {
-  let pulso = pulsoSimulado();      // SONIDO: amplitud.getLevel()
-  let agudos = agudosSimulados();   // SONIDO: fft.getEnergy("treble") / 255
+  let pulso = pulsoMusica();      // golpes del bajo (FFT)
+  let agudos = agudosMusica();   // energía de los agudos (FFT)
 
   background(8);
 
@@ -1350,7 +1550,7 @@ function dibujarEscena5() {
   textAlign(CENTER, CENTER);
   textSize(14);
   text("Aliens en la fiesta: " + aliens.length, ANCHO / 2, 625);
-  // SONIDO: "Acid World"
+  // la música (Acid World) se inicia en iniciarMusicaEscena(5)
 }
 
 function dibujarAlien(a, pulso) {
@@ -1434,7 +1634,7 @@ function crearSet() {
       fase: random(1) // cada persona salta un poco distinto
     });
   }
-  // SONIDO: partesUltra[0] = loadSound("assets/sonidos/ultra_parte1.mp3"), etc.
+  // las 3 partes del set se cargan en cargarMusica()
 }
 
 // Color del cielo según la hora (como en "Amor sin tiempo")
@@ -1454,7 +1654,7 @@ function colorDelCielo(h) {
 }
 
 function dibujarEscena6() {
-  let pulso = pulsoSimulado(); // SONIDO: fft.getEnergy("bass") / 255
+  let pulso = pulsoMusica(); // golpes del bajo (FFT)
   let h = hour() + minute() / 60;
 
   background(colorDelCielo(h));
@@ -1601,8 +1801,11 @@ function presionarEscena6() {
     let bx = 860;
     let by = 110 + i * 48;
     if (mouseX > bx && mouseX < bx + 110 && mouseY > by && mouseY < by + 36) {
-      parteElegida = i;
-      // SONIDO: detener la parte anterior y reproducir partesUltra[i]
+      if (i != parteElegida) {
+        partesUltra[parteElegida].stop(); // se calla la parte anterior
+        parteElegida = i;
+        partesUltra[parteElegida].play(); // suena la nueva
+      }
     }
   }
 }
@@ -1614,6 +1817,19 @@ function presionarEscena6() {
 // ============================================================
 
 function mousePressed() {
+  // mientras carga la música, los clics no hacen nada
+  if (!musicaCargada) {
+    return;
+  }
+
+  // primer clic: se activa el audio y empieza la música de la consola
+  if (!audioActivado) {
+    userStartAudio();
+    audioActivado = true;
+    iniciarMusicaEscena(1);
+    return;
+  }
+
   if (escena == 0) {
     return; // durante el separador no pasa nada
   }
