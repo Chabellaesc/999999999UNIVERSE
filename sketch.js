@@ -7,7 +7,7 @@
  *  0: separador  → pantalla corta de transición entre escenas
  *  1: La consola → inicio, 9 pads (5 llevan a escenas, 4 solo suenan)
  *  2: El tocadiscos → arrastrar un vinilo al plato
- *  3: La mezcla → arrastrar criaturas (stems) a los carriles
+ *  3: La mezcla → arrastrar criaturas (los 5 stems de 9x9) a los carriles, sincronizados
  *  4: La gira → laberinto: 9 pases, fans y cronómetro
  *  5: The real rave → la fiesta underground: bodega oscura, aliens, bolas disco y láseres
  *  6: The festival → la fiesta grande (Ultra): noche según la hora real + avión con datos
@@ -33,7 +33,7 @@
 
 const ANCHO = 1000;
 const ALTO = 650;
-const BPM = 140; // velocidad aproximada del hard techno
+const BPM = 130; // velocidad de La mezcla: todos los stems se ajustan a esta
 
 let escena = 1;            // escena que se está mostrando
 let escenaDestino = 1;     // escena a la que vamos después del separador
@@ -68,8 +68,21 @@ let promedioBajos = -100; // promedio lento de los bajos, para detectar los golp
 // Sensibilidad: si algo salta muy poco, baja este número; si salta demasiado, súbelo
 const SENSIBILIDAD_BAJOS = 6;
 
-// FUENTES: más adelante se cargan las fuentes del moodboard (Acidic, Aero Matics Stencil)
-// let fuenteTitulos, fuenteTextos;
+// ---- FUENTES ----
+// Se cargan desde Google Fonts con un <link> en index.html.
+// Títulos: stencil industrial (como las letras pintadas en cajas y bodegas).
+// Textos: monoespaciada, como las pantallas de las máquinas.
+const FUENTE_TITULOS = "Saira Stencil One";
+const FUENTE_TEXTO = "Space Mono";
+
+let inicioEscena = 0; // cuándo entramos a la escena actual (para el efecto de máquina de escribir)
+
+// ---- VOLUMEN GENERAL DE LA PÁGINA ----
+let salidaGeneral;          // todos los sonidos pasan por aquí antes de llegar a los parlantes
+let volumenGeneral = 0.8;   // de 0 a 1
+let silenciado = false;
+let arrastrandoVolumen = false;
+let amplitudVoz;            // mide solo la voz, para mover la boca del alien
 
 
 // ============================================================
@@ -94,13 +107,31 @@ async function setup() {
   // herramientas de análisis
   amplitud = new p5.Amplitude(0.6); // 0.6 = suaviza un poco el valor
   fft = new p5.FFT(1024);           // 1024 bandas: así se separan bien los bajos
+  amplitudVoz = new p5.Amplitude(0.5);
+
+  // salida general: un "control de volumen" por el que pasan todos los sonidos.
+  // Como el FFT escucha ANTES de esta salida, aunque silencies la página
+  // las cosas se siguen moviendo con la música.
+  salidaGeneral = getAudioContext().createGain();
+  salidaGeneral.connect(getAudioContext().destination);
+  aplicarVolumenGeneral();
+
+  // esperar a que las fuentes estén listas (si no cargan, se usan las normales)
+  try {
+    await document.fonts.load('40px "' + FUENTE_TITULOS + '"');
+    await document.fonts.load('14px "' + FUENTE_TEXTO + '"');
+    await document.fonts.load('bold 14px "' + FUENTE_TEXTO + '"');
+  } catch (error) {
+    console.log("No cargaron las fuentes; se usan las del sistema");
+  }
+  textFont(FUENTE_TEXTO); // fuente de todos los textos (los títulos la cambian)
 
   await cargarMusica();
 }
 
 // Carga todos los audios, uno por uno, mostrando el progreso en pantalla
 async function cargarMusica() {
-  let total = 7 + vinilos.length; // 7 audios de las escenas + los de los vinilos
+  let total = 7 + vinilos.length + criaturas.length; // audios de las escenas + vinilos + stems
   let cargados = 0;
 
   cancionInicio = await cargarSonido("X0004000X.MP3", ++cargados, total);
@@ -115,10 +146,20 @@ async function cargarMusica() {
     v.cancion = await cargarSonido(v.archivoAudio, ++cargados, total);
   }
 
+  for (let cr of criaturas) {
+    cr.sonido = await cargarSonido(cr.archivo, ++cargados, total, RUTA_STEMS);
+    if (cr.tipo == "voz") {
+      cr.sonido.connect(amplitudVoz); // la boca del alien escucha solo la voz
+    }
+  }
+
   // todas las canciones se repiten en loop (menos el golpe de los pads)
   let enLoop = [cancionInicio, alarma, cancionRave, partesUltra[0], partesUltra[1], partesUltra[2]];
   for (let v of vinilos) {
     enLoop.push(v.cancion);
+  }
+  for (let cr of criaturas) {
+    enLoop.push(cr.sonido);
   }
   for (let s of enLoop) {
     s.loop();
@@ -126,24 +167,40 @@ async function cargarMusica() {
   musicaCargada = true;
 }
 
-// Carga un audio y lo conecta al FFT y a la Amplitude para poder analizarlo
-async function cargarSonido(archivo, numero, total) {
+// Carga un audio y lo conecta al FFT y a la Amplitude para poder analizarlo.
+// carpeta: si no se dice otra, busca en assets/sonidos
+async function cargarSonido(archivo, numero, total, carpeta = RUTA_SONIDOS) {
   // pantalla de carga: si se queda pegada en un archivo, ese nombre está mal escrito
   background(negro);
   noStroke();
   fill(verde);
   textAlign(CENTER, CENTER);
-  textStyle(BOLD);
-  textSize(40);
+  textFont(FUENTE_TITULOS);
+  textSize(56);
   text("999999999", ANCHO / 2, ALTO / 2 - 40);
-  textStyle(NORMAL);
+  textFont(FUENTE_TEXTO);
   fill(blanco);
-  textSize(16);
+  textSize(14);
   text("Cargando música " + numero + " / " + total + "   (" + archivo + ")", ANCHO / 2, ALTO / 2 + 20);
+  // barrita de progreso
+  noFill();
+  stroke(verde);
+  strokeWeight(1);
+  rect(ANCHO / 2 - 150, ALTO / 2 + 45, 300, 8, 4);
+  noStroke();
+  fill(verde);
+  rect(ANCHO / 2 - 150, ALTO / 2 + 45, 300 * numero / total, 8, 4);
 
-  let sonido = await loadSound(RUTA_SONIDOS + archivo);
+  let sonido = await loadSound(carpeta + archivo);
   sonido.connect(fft);
   sonido.connect(amplitud);
+  // en vez de ir directo a los parlantes, pasa por la salida general (el volumen de la página)
+  try {
+    sonido.output.disconnect(getAudioContext().destination);
+  } catch (error) {
+    // si ya estaba desconectado, no pasa nada
+  }
+  sonido.output.connect(salidaGeneral);
   return sonido;
 }
 
@@ -185,6 +242,9 @@ function draw() {
   if (escena >= 2) {
     dibujarBotonVolver();
   }
+
+  // el control de volumen aparece siempre
+  dibujarControlVolumen();
 }
 
 
@@ -205,14 +265,14 @@ function dibujarPantallaEntrada() {
   background(negro);
   noStroke();
   textAlign(CENTER, CENTER);
-  textStyle(BOLD);
+  textFont(FUENTE_TITULOS);
   fill(verde);
-  textSize(70);
+  textSize(96);
   text("999999999", ANCHO / 2, ALTO / 2 - 60);
-  textStyle(NORMAL);
+  textFont(FUENTE_TEXTO);
   fill(blanco);
-  textSize(22);
-  text("Detrás de la máquina", ANCHO / 2, ALTO / 2);
+  textSize(18);
+  text("DETRÁS DE LA MÁQUINA", ANCHO / 2, ALTO / 2 + 10);
   // el texto titila para invitar a hacer clic
   fill(255, 150 + sin(millis() * 0.005) * 100);
   textSize(16);
@@ -231,6 +291,8 @@ function iniciarMusicaEscena(numero) {
     if (viniloSonando >= 0) {
       reproducirVinilo(viniloSonando);
     }
+  } else if (numero == 3) {
+    iniciarStems(); // los 5 stems arrancan juntos (los que no están en un carril, en silencio)
   } else if (numero == 4) {
     alarma.rate(1);
     alarma.play();
@@ -239,7 +301,6 @@ function iniciarMusicaEscena(numero) {
   } else if (numero == 6) {
     partesUltra[parteElegida].play();
   }
-  // la escena 3 (la mezcla) no tiene música por ahora
 }
 
 // Detiene todo lo que esté sonando
@@ -247,6 +308,9 @@ function detenerMusica() {
   let todos = [cancionInicio, kickBajo, alarma, cancionRave, partesUltra[0], partesUltra[1], partesUltra[2]];
   for (let v of vinilos) {
     todos.push(v.cancion);
+  }
+  for (let cr of criaturas) {
+    todos.push(cr.sonido);
   }
   for (let s of todos) {
     if (s && s.isPlaying()) {
@@ -300,17 +364,175 @@ function agudosMusica() {
   return agudos;
 }
 
-// Título y frase de instrucción arriba de cada escena
+// ---------- TÍTULOS E INSTRUCCIONES ----------
+// Título: letra stencil con sombra negra y una copia verde que se separa
+//         con cada golpe del bajo (efecto "glitch"), entre dos rayas verdes.
+// Instrucción: dentro de una cápsula negra, aparece letra por letra como
+//         si una máquina la estuviera escribiendo, con un cursor que titila.
 function dibujarTituloEscena(titulo, instruccion) {
+  let cx = ANCHO / 2;
+  let golpe = pulsoMusica();
+
+  // --- título ---
+  textFont(FUENTE_TITULOS);
+  textStyle(NORMAL);
+  textAlign(CENTER, CENTER);
+  textSize(42);
+  noStroke();
+  fill(negro);
+  text(titulo, cx + 3, 33);                  // sombra
+  fill(60, 255, 42, 200);
+  text(titulo, cx - 2 - golpe * 6, 30);      // copia verde que se separa con el bajo
+  fill(blanco);
+  text(titulo, cx, 30);                      // título
+
+  // rayas a los lados del título (se alargan con el bajo)
+  let mitad = textWidth(titulo) / 2;
+  let largo = 50 + golpe * 25;
+  stroke(verde);
+  strokeWeight(3);
+  line(cx - mitad - 20, 30, cx - mitad - 20 - largo, 30);
+  line(cx + mitad + 20, 30, cx + mitad + 20 + largo, 30);
+  noStroke();
+  fill(verde);
+  circle(cx - mitad - 20 - largo, 30, 7);
+  circle(cx + mitad + 20 + largo, 30, 7);
+
+  // --- instrucción --- (si viene vacía, no se dibuja la cápsula)
+  if (instruccion != "") {
+    dibujarInstruccion(instruccion, cx, 70);
+  }
+}
+
+// Cápsula con texto que se escribe solo, letra por letra
+function dibujarInstruccion(instruccion, cx, cy) {
+  textFont(FUENTE_TEXTO);
+  textStyle(NORMAL);
+  textSize(12);
+  // si la frase es muy larga, se achica para que quepa
+  let anchoTexto = textWidth(instruccion);
+  if (anchoTexto > 880) {
+    textSize(12 * 880 / anchoTexto);
+    anchoTexto = textWidth(instruccion);
+  }
+  let anchoCapsula = anchoTexto + 44;
+  let izquierda = cx - anchoCapsula / 2;
+
+  // cápsula (del tamaño de la frase completa, para que no cambie mientras se escribe)
+  fill(0, 0, 0, 175);
+  stroke(60, 255, 42, 160);
+  strokeWeight(1);
+  rect(izquierda, cy - 12, anchoCapsula, 24, 12);
+  noStroke();
+  fill(verde);
+  triangle(izquierda + 12, cy - 4, izquierda + 12, cy + 4, izquierda + 18, cy); // flechita "▶"
+
+  // efecto de máquina de escribir: 45 letras por segundo desde que entramos a la escena
+  let letras = floor((millis() - inicioEscena) / 22);
+  let visible = instruccion.substring(0, letras);
+  fill(blanco);
+  textAlign(LEFT, CENTER);
+  text(visible, izquierda + 26, cy);
+
+  // cursor que titila al final
+  if (frameCount % 40 < 20) {
+    fill(verde);
+    rect(izquierda + 27 + textWidth(visible), cy - 6, 7, 12);
+  }
+  textAlign(CENTER, CENTER);
+}
+
+// ---------- CONTROL DE VOLUMEN DE LA PÁGINA ----------
+// Pequeño, arriba a la derecha (en La gira, abajo a la derecha para no
+// chocar con el tiempo). Clic en el parlante = silenciar; la barrita = volumen.
+const ANCHO_VOLUMEN = 140;
+const ALTO_VOLUMEN = 26;
+
+function posicionVolumen() {
+  if (escena == 4) {
+    return { x: ANCHO - ANCHO_VOLUMEN - 15, y: ALTO - ALTO_VOLUMEN - 6 };
+  }
+  return { x: ANCHO - ANCHO_VOLUMEN - 15, y: 12 };
+}
+
+function dibujarControlVolumen() {
+  let p = posicionVolumen();
+  let callado = silenciado || volumenGeneral == 0;
+
+  // fondo de la cápsula
+  fill(0, 0, 0, 150);
+  stroke(255, 255, 255, 50);
+  strokeWeight(1);
+  rect(p.x, p.y, ANCHO_VOLUMEN, ALTO_VOLUMEN, 13);
+
+  // parlante
+  let px = p.x + 12;
+  let py = p.y + ALTO_VOLUMEN / 2;
   noStroke();
   fill(blanco);
-  textAlign(CENTER, CENTER);
-  textStyle(BOLD);
-  textSize(30);
-  text(titulo, ANCHO / 2, 38);
-  textStyle(NORMAL);
-  textSize(15);
-  text(instruccion, ANCHO / 2, 70);
+  rect(px, py - 3, 5, 6);
+  triangle(px + 4, py - 3, px + 11, py - 8, px + 11, py + 8);
+  triangle(px + 4, py + 3, px + 11, py - 8, px + 11, py + 8);
+  if (callado) {
+    // una X roja cuando está en silencio
+    stroke(rojo);
+    strokeWeight(2);
+    line(px + 14, py - 4, px + 20, py + 4);
+    line(px + 20, py - 4, px + 14, py + 4);
+  } else {
+    // ondas de sonido (más ondas = más volumen)
+    noFill();
+    stroke(blanco);
+    strokeWeight(1.5);
+    arc(px + 11, py, 8, 8, -QUARTER_PI, QUARTER_PI);
+    if (volumenGeneral > 0.5) {
+      arc(px + 11, py, 15, 15, -QUARTER_PI, QUARTER_PI);
+    }
+  }
+
+  // barrita de volumen
+  let x0 = p.x + 40;
+  let x1 = p.x + ANCHO_VOLUMEN - 14;
+  let xPerilla = lerp(x0, x1, volumenGeneral);
+  strokeWeight(3);
+  stroke(80);
+  line(x0, py, x1, py);
+  stroke(callado ? color(120) : verde);
+  line(x0, py, xPerilla, py);
+  noStroke();
+  fill(callado ? color(160) : verde);
+  circle(xPerilla, py, 11);
+}
+
+// ¿el mouse está sobre el control de volumen?
+function clicEnVolumen() {
+  let p = posicionVolumen();
+  return mouseX > p.x && mouseX < p.x + ANCHO_VOLUMEN &&
+         mouseY > p.y && mouseY < p.y + ALTO_VOLUMEN;
+}
+
+function presionarVolumen() {
+  let p = posicionVolumen();
+  if (mouseX < p.x + 34) {
+    silenciado = !silenciado;       // clic en el parlante: silencio sí / no
+  } else {
+    silenciado = false;             // clic en la barrita: cambia el volumen
+    arrastrandoVolumen = true;
+    moverVolumen();
+  }
+  aplicarVolumenGeneral();
+}
+
+function moverVolumen() {
+  let p = posicionVolumen();
+  volumenGeneral = constrain(map(mouseX, p.x + 40, p.x + ANCHO_VOLUMEN - 14, 0, 1), 0, 1);
+  aplicarVolumenGeneral();
+}
+
+// Le pone el volumen a la salida general (con un fundido cortito para que no truene)
+function aplicarVolumenGeneral() {
+  let valor = silenciado ? 0 : volumenGeneral;
+  salidaGeneral.gain.setTargetAtTime(valor, getAudioContext().currentTime, 0.05);
 }
 
 // Botón "9" para volver a la consola
@@ -323,10 +545,10 @@ function dibujarBotonVolver() {
   noStroke();
   fill(encima ? negro : verde);
   textAlign(CENTER, CENTER);
-  textStyle(BOLD);
-  textSize(26);
+  textFont(FUENTE_TITULOS);
+  textSize(30);
   text("9", 45, 46);
-  textStyle(NORMAL);
+  textFont(FUENTE_TEXTO);
 }
 
 function clicEnVolver() {
@@ -347,7 +569,7 @@ function dibujarSeparador() {
   background(negro);
   noStroke();
   textAlign(CENTER, CENTER);
-  textStyle(BOLD);
+  textFont(FUENTE_TITULOS);
 
   // filas de 9 que se deslizan: las pares a la derecha, las impares a la izquierda
   textSize(36);
@@ -369,7 +591,7 @@ function dibujarSeparador() {
   fill(blanco);
   textSize(30);
   text(nombresEscenas[escenaDestino].toUpperCase(), ANCHO / 2, ALTO / 2 + 180);
-  textStyle(NORMAL);
+  textFont(FUENTE_TEXTO);
 
   // cuando termina, entramos a la escena
   if (progreso >= 1) {
@@ -377,6 +599,7 @@ function dibujarSeparador() {
     if (escena == 4) {
       reiniciarGira(); // el cronómetro del laberinto empieza al entrar
     }
+    inicioEscena = millis(); // para que la instrucción se escriba desde cero
     iniciarMusicaEscena(escena); // empieza la música de la nueva escena
   }
 }
@@ -419,22 +642,39 @@ function dibujarEscena1() {
   background(rojo);
   let pulso = pulsoMusica();
 
+  // alambre de púas en las zonas vacías (va detrás de los DJs y la consola)
+  dibujarAlambresConsola();
+
   // siluetas de los dos DJs a los lados (mueven la cabeza con el ritmo)
   dibujarDJ(160, 470, "CARLO", pulso);
   dibujarDJ(840, 470, "GIOVANNI", pulso);
 
-  // título
+  // título: 999999999 en stencil, con una copia verde que se separa con el bajo
   noStroke();
-  fill(negro);
   textAlign(CENTER, CENTER);
-  textStyle(BOLD);
-  textSize(60);
-  text("999999999", ANCHO / 2, 70);
+  textFont(FUENTE_TITULOS);
   textStyle(NORMAL);
-  textSize(20);
-  text("Detrás de la máquina", ANCHO / 2, 120);
+  textSize(84);
+  fill(60, 255, 42, 210);
+  text("999999999", ANCHO / 2 - 3 - pulso * 8, 66);
+  fill(negro);
+  text("999999999", ANCHO / 2, 66);
+
+  // subtítulo entre dos rayas
+  textFont(FUENTE_TEXTO);
+  textStyle(BOLD);
   textSize(14);
-  text("Haz clic en un pad con borde verde para entrar a una escena", ANCHO / 2, 160);
+  text("DETRÁS DE LA MÁQUINA", ANCHO / 2, 122);
+  textStyle(NORMAL);
+  let mitad = textWidth("DETRÁS DE LA MÁQUINA") / 2;
+  stroke(negro);
+  strokeWeight(2);
+  line(ANCHO / 2 - mitad - 15, 122, ANCHO / 2 - mitad - 70, 122);
+  line(ANCHO / 2 + mitad + 15, 122, ANCHO / 2 + mitad + 70, 122);
+  noStroke();
+
+  // instrucción que se escribe sola
+  dibujarInstruccion("Haz clic en un pad con borde verde para entrar a una escena", ANCHO / 2, 162);
 
   // cuerpo de la consola
   let primero = pads[0];
@@ -506,6 +746,73 @@ function dibujarDJ(x, y, nombre, pulso) {
   text(nombre, 0, -282); // más arriba para que no choque con las antenas
   textStyle(NORMAL);
   pop();
+}
+
+// Dónde va cada alambre en la consola: esquinas de arriba, los dos lados y abajo
+function dibujarAlambresConsola() {
+  dibujarAlambre(0, 105, 295, 12);          // esquina de arriba a la izquierda
+  dibujarAlambre(ANCHO, 105, 705, 12);      // esquina de arriba a la derecha
+  dibujarAlambre(-10, 150, 255, 150);       // horizontal arriba a la izquierda
+  dibujarAlambre(745, 150, ANCHO + 10, 150);// horizontal arriba a la derecha
+  dibujarAlambre(42, 175, 42, 618);         // lado izquierdo
+  dibujarAlambre(958, 175, 958, 618);       // lado derecho
+  dibujarAlambre(-10, 634, ANCHO + 10, 634);// abajo, de lado a lado
+}
+
+// Un alambre de púas entre dos puntos:
+// dos hilos que se enroscan entre sí + nudos con púas cada cierto espacio.
+// Con cada golpe del bajo el alambre vibra un poquito.
+function dibujarAlambre(x1, y1, x2, y2) {
+  let largo = dist(x1, y1, x2, y2);
+  let angulo = atan2(y2 - y1, x2 - x1);
+  let vibracion = pulsoMusica() * 1.5;
+
+  push();
+  translate(x1, y1);
+  rotate(angulo); // así siempre dibujamos el alambre "acostado" de 0 a largo
+  noFill();
+
+  // sombra roja oscura para darle profundidad
+  stroke(120, 0, 0);
+  strokeWeight(2);
+  dibujarHilos(largo, 3, vibracion);
+
+  // los dos hilos enroscados
+  stroke(20);
+  strokeWeight(1.8);
+  dibujarHilos(largo, 0, vibracion);
+
+  // nudos con púas cada 42 píxeles
+  for (let d = 21; d < largo; d += 42) {
+    let temblor = sin(d * 0.3 + millis() * 0.03) * vibracion;
+    push();
+    translate(d, temblor);
+    stroke(20);
+    strokeWeight(1.8);
+    line(-6, -7, 6, 7);   // púa en X
+    line(-6, 7, 6, -7);
+    line(0, -8, 0, 8);    // púa vertical
+    noStroke();
+    fill(20);
+    ellipse(0, 0, 8, 6);  // nudo
+    fill(255, 255, 255, 60);
+    ellipse(-1, -1, 3, 2); // brillo del metal
+    pop();
+  }
+  pop();
+}
+
+// Dos hilos con forma de onda, uno al revés del otro, para que parezcan enroscados
+function dibujarHilos(largo, desplazamiento, vibracion) {
+  for (let hilo = 0; hilo < 2; hilo++) {
+    let fase = hilo * PI;
+    beginShape();
+    for (let d = 0; d <= largo; d += 4) {
+      let y = sin(d * 0.22 + fase) * 2.5 + sin(d * 0.3 + millis() * 0.03) * vibracion;
+      vertex(d, y + desplazamiento);
+    }
+    endShape();
+  }
 }
 
 // CARLO de espaldas: cabeza verde brillante con una araña negra
@@ -738,12 +1045,18 @@ function dibujarEscena2() {
 
   dibujarPerilla();
 
+  // qué está sonando: en dos líneas, justo debajo del tocadiscos
+  // (así no se cruza con el texto de la perilla de volumen)
   if (sonando) {
     noStroke();
     fill(blanco);
     textAlign(CENTER, CENTER);
+    textStyle(BOLD);
     textSize(15);
-    text("Sonando: " + vinilos[viniloSonando].titulo + "   (haz clic en el disco para quitarlo)", plato.x, 595);
+    text("SONANDO: " + vinilos[viniloSonando].titulo, plato.x, 563);
+    textStyle(NORMAL);
+    textSize(12);
+    text("(haz clic en el disco para quitarlo)", plato.x, 584);
   }
 }
 
@@ -878,25 +1191,36 @@ function soltarEscena2() {
 
 // ============================================================
 //  ESCENA 3 — LA MEZCLA
-//  Cada criatura es un sonido (stem). Al ponerla en un carril
-//  empieza a sonar en loop; al sacarla se calla.
+//  Cada criatura es un sonido (stem) que mandó 9x9.
+//
+//  CÓMO SE SINCRONIZAN (como en Ableton, pero más simple):
+//   1. Misma velocidad: todos se ajustan a 130 BPM con rate().
+//      Por ejemplo el acid va a 138 BPM → rate(130 / 138).
+//   2. Mismo inicio: al entrar a la escena los 5 empiezan a sonar
+//      JUNTOS pero en silencio. Poner una criatura en un carril solo
+//      le sube el volumen; sacarla lo vuelve a bajar. Como siempre
+//      sonaron a la par, nunca quedan a destiempo.
 // ============================================================
 
+const RUTA_STEMS = "assets/stems/";
 let carriles = [];
 let criaturas = [];
 let criaturaArrastrada = -1;
+let inicioStems = 0; // momento en que empezaron los stems (para el secuenciador)
 
 function crearMezcla() {
-  for (let i = 0; i < 4; i++) {
-    carriles.push({ x: 360, y: 150 + i * 115, ancho: 580, alto: 95, ocupadoPor: -1 });
+  for (let i = 0; i < 5; i++) {
+    carriles.push({ x: 360, y: 145 + i * 92, ancho: 580, alto: 80, ocupadoPor: -1 });
   }
 
-  // patron: 16 pasos; 1 = suena en ese paso, 0 = silencio
+  // patron: 16 pasos; 1 = se ilumina en ese paso, 0 = apagado (es solo visual)
+  // archivo: nombre EXACTO del stem en assets/stems   ·   bpm: velocidad original del loop
   let datos = [
-    { tipo: "kick",  nombre: "Kick",              patron: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0] },
-    { tipo: "acido", nombre: "Línea ácida (303)", patron: [1,1,0,1, 0,1,1,0, 1,0,1,1, 0,1,0,1] },
-    { tipo: "hihat", nombre: "Hi-hats",           patron: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0] },
-    { tipo: "synth", nombre: "Sintetizador",      patron: [1,0,0,0, 0,0,0,0, 1,0,0,1, 0,0,0,0] }
+    { tipo: "kick",  nombre: "Kick",         archivo: "kick.wav",   bpm: 130, patron: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0] },
+    { tipo: "acido", nombre: "Acid (303)",   archivo: "acid.wav",   bpm: 138, patron: [1,1,0,1, 0,1,1,0, 1,0,1,1, 0,1,0,1] },
+    { tipo: "hihat", nombre: "Hi-hats",      archivo: "hithat.wav", bpm: 130, patron: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0] },
+    { tipo: "perc",  nombre: "Percusión",    archivo: "perc.wav",   bpm: 130, patron: [0,0,1,1, 0,1,0,0, 0,0,1,0, 0,1,0,1] },
+    { tipo: "voz",   nombre: "Voz",          archivo: "vocal.wav",  bpm: 135, patron: [0,0,0,0, 1,1,1,0, 0,0,0,0, 1,1,0,0] }
   ];
 
   for (let i = 0; i < datos.length; i++) {
@@ -904,7 +1228,10 @@ function crearMezcla() {
     criaturas.push({
       tipo: datos[i].tipo,
       nombre: datos[i].nombre,
+      archivo: datos[i].archivo,
+      bpm: datos[i].bpm,
       patron: datos[i].patron,
+      sonido: null, // aquí queda el stem cuando se cargue en setup
       x: 170,
       y: yCasa,
       xCasa: 170,
@@ -912,7 +1239,25 @@ function crearMezcla() {
       carril: -1 // -1 = no está en ningún carril
     });
   }
-  // (pendiente) stems[i] = loadSound("assets/sonidos/stem_kick.mp3"), etc.
+  // los stems se cargan después, en cargarMusica()
+}
+
+// Empieza los 5 stems al mismo tiempo. Cada uno suena fuerte solo si
+// su criatura está en un carril; si no, suena "en silencio".
+function iniciarStems() {
+  for (let cr of criaturas) {
+    cr.sonido.rate(BPM / cr.bpm); // ajusta su velocidad a 130 BPM
+    cr.sonido.amp(cr.carril >= 0 ? 1 : 0.001);
+  }
+  for (let cr of criaturas) {
+    cr.sonido.play();
+  }
+  inicioStems = millis();
+}
+
+// Sube o baja el volumen de un stem (con un pequeño fundido de 0.1 s)
+function volumenStem(cr, encendido) {
+  cr.sonido.amp(encendido ? 1 : 0.001);
 }
 
 // Dónde está una criatura: arrastrándose, en su carril o en su casa
@@ -932,9 +1277,9 @@ function dibujarEscena3() {
   background(rojo);
   dibujarTituloEscena("LA MEZCLA", "Arrastra cada criatura a un carril para sumarla a tu track");
 
-  // en qué paso (de 16) va el loop
+  // en qué paso (de 16) va el loop, contando desde que empezaron los stems
   let duracionPaso = 60000 / BPM / 4;
-  let pasoActual = floor(millis() / duracionPaso) % 16;
+  let pasoActual = floor((millis() - inicioStems) / duracionPaso) % 16;
   let capas = 0;
 
   // zona de las criaturas y mesa de producción
@@ -985,7 +1330,7 @@ function dibujarEscena3() {
   fill(blanco);
   textAlign(CENTER, CENTER);
   textSize(14);
-  text("Así hacen sus sets en vivo: capa por capa, sin computador   ·   Capas sonando: " + capas + " / 4", ANCHO / 2, 630);
+  text("Así hacen sus sets en vivo: capa por capa   ·   Capas sonando: " + capas + " / " + criaturas.length, ANCHO / 2, 630);
 }
 
 function dibujarCriaturaCompleta(i, pasoActual) {
@@ -1048,8 +1393,8 @@ function dibujarCriatura(cr, x, y, sonando, golpe) {
       circle(cos(a) * separacion, sin(a) * separacion, 7);
     }
 
-  } else if (cr.tipo == "synth") {
-    // SINTETIZADOR: una cajita con una onda en la boca
+  } else if (cr.tipo == "perc") {
+    // PERCUSIÓN: una cajita con una onda en la boca
     noStroke();
     fill(verde);
     rect(-28, -22, 56, 44, 8);
@@ -1065,6 +1410,44 @@ function dibujarCriatura(cr, x, y, sonando, golpe) {
       vertex(px, 10 + sin(px * 0.3 + millis() * velocidad) * 4);
     }
     endShape();
+
+  } else if (cr.tipo == "voz") {
+    // VOZ: un alien verde que canta. La boca se abre con el volumen REAL
+    // de la voz (amplitudVoz solo escucha este stem): cuando la voz suena
+    // fuerte, la boca se abre más; cuando calla, se cierra.
+    let nivelVoz = constrain(map(amplitudVoz.getLevel(), 0, 0.2, 0, 1), 0, 1);
+    let abierta = sonando ? 3 + nivelVoz * 16 : 3;
+
+    // antenas
+    stroke(verde);
+    strokeWeight(3);
+    line(-7, -20, -13, -34);
+    line(7, -20, 13, -34);
+    noStroke();
+    fill(verde);
+    circle(-13, -34, 7);
+    circle(13, -34, 7);
+
+    // cabeza
+    fill(verde);
+    ellipse(0, 0, 44, 46);
+
+    // ojos grandes de alien
+    fill(negro);
+    ellipse(-9, -6, 13, 17);
+    ellipse(9, -6, 13, 17);
+
+    // boca que canta
+    fill(negro);
+    ellipse(0, 12, 14, abierta);
+
+    // micrófono
+    stroke(150);
+    strokeWeight(4);
+    line(18, 22, 26, 6);                   // mango
+    noStroke();
+    fill(80);
+    circle(27, 3, 12);                     // cabeza del micrófono
   }
 
   pop();
@@ -1080,7 +1463,7 @@ function presionarEscena3() {
       if (cr.carril >= 0) {
         carriles[cr.carril].ocupadoPor = -1;
         cr.carril = -1;
-        // (pendiente) stems[i].stop()
+        volumenStem(cr, false); // se baja el volumen (sigue corriendo en silencio)
       }
       cr.x = mouseX;
       cr.y = mouseY;
@@ -1107,7 +1490,7 @@ function soltarEscena3() {
     if (dentro && c.ocupadoPor == -1) {
       c.ocupadoPor = criaturaArrastrada;
       cr.carril = j;
-      // (pendiente) stems[criaturaArrastrada].loop()
+      volumenStem(cr, true); // se sube el volumen: entra en el compás
     }
   }
   criaturaArrastrada = -1; // si no cayó en un carril libre, vuelve a su casa
@@ -1155,7 +1538,7 @@ let jugador, pases, fans, cabina;
 let inicioGira = 0;
 let penalizacion = 0;            // milisegundos perdidos por los fans
 let tiempoRestante = TIEMPO_LIMITE;
-let estadoGira = "jugando";      // "jugando", "ganaste" o "perdiste"
+let estadoGira = "esperando";    // "esperando" (pantalla de inicio), "jugando", "ganaste" o "perdiste"
 let protegidoHasta = 0;          // después de un choque, un ratico sin chocar otra vez
 
 function reiniciarGira() {
@@ -1174,8 +1557,21 @@ function reiniciarGira() {
   inicioGira = millis();
   penalizacion = 0;
   tiempoRestante = TIEMPO_LIMITE;
-  estadoGira = "jugando";
+  estadoGira = "esperando"; // primero sale la pantalla de "Haz click para empezar"
   protegidoHasta = 0;
+}
+
+// Empieza el juego: desde aquí corre el cronómetro
+function empezarGira() {
+  inicioGira = millis();
+  estadoGira = "jugando";
+}
+
+// Clic en La gira: si está en la pantalla de inicio, empieza el juego
+function presionarEscena4() {
+  if (estadoGira == "esperando") {
+    empezarGira();
+  }
 }
 
 function esPared(fila, col) {
@@ -1216,11 +1612,12 @@ function dibujarEscena4() {
   // "Alarm 303" se acelera mientras se acaba el tiempo (de velocidad 1 a 1.4)
   if (estadoGira == "jugando") {
     alarma.rate(map(urgencia, 0, 1, 1, 1.4));
-  } else if (alarma.isPlaying()) {
+  } else if (estadoGira != "esperando" && alarma.isPlaying()) {
     alarma.stop(); // cuando el juego termina, la alarma se calla
   }
 
-  dibujarTituloEscena("LA GIRA", "Usa las flechas: recoge los 9 pases y llega a la cabina (DJ) antes de que se acabe el tiempo");
+  // durante el juego solo va el título (las instrucciones salen en la pantalla de inicio)
+  dibujarTituloEscena("LA GIRA", "");
 
   // paredes
   noStroke();
@@ -1305,16 +1702,38 @@ function dibujarEscena4() {
     noStroke();
   }
 
-  // cronómetro y contador de pases
-  noStroke();
-  fill(blanco);
-  textAlign(RIGHT, CENTER);
-  textSize(18);
-  text("TIEMPO: " + ceil(tiempoRestante / 1000), ANCHO - 40, 25);
-  text("PASES: " + contarPases() + " / 9", ANCHO - 40, 50);
+  // cronómetro y contador de pases (aparecen cuando empieza el juego)
+  if (estadoGira != "esperando") {
+    noStroke();
+    fill(blanco);
+    textAlign(RIGHT, CENTER);
+    textSize(18);
+    text("TIEMPO: " + ceil(tiempoRestante / 1000), ANCHO - 40, 25);
+    text("PASES: " + contarPases() + " / 9", ANCHO - 40, 50);
+  }
+
+  // pantalla de inicio: grande "Haz click para empezar" y las instrucciones abajo
+  if (estadoGira == "esperando") {
+    noStroke();
+    fill(0, 0, 0, 215);
+    rect(MAPA_X, MAPA_Y, mapa[0].length * TAM_CELDA, mapa.length * TAM_CELDA);
+
+    // texto grande que late suave para invitar a hacer clic
+    textAlign(CENTER, CENTER);
+    textFont(FUENTE_TITULOS);
+    textSize(54 + sin(millis() * 0.004) * 2);
+    fill(negro);
+    text("HAZ CLICK PARA EMPEZAR A JUGAR", ANCHO / 2 + 3, ALTO / 2 - 17);
+    fill(verde);
+    text("HAZ CLICK PARA EMPEZAR A JUGAR", ANCHO / 2, ALTO / 2 - 20);
+    textFont(FUENTE_TEXTO);
+
+    // instrucciones en la cápsula que se escribe sola
+    dibujarInstruccion("Muévete con las flechas: recoge los 9 pases y llega a la cabina del DJ antes de que se acabe el tiempo", ANCHO / 2, ALTO / 2 + 45);
+  }
 
   // pantalla de final
-  if (estadoGira != "jugando") {
+  if (estadoGira == "ganaste" || estadoGira == "perdiste") {
     fill(0, 0, 0, 200);
     rect(MAPA_X, MAPA_Y, mapa[0].length * TAM_CELDA, mapa.length * TAM_CELDA);
     textAlign(CENTER, CENTER);
@@ -1334,10 +1753,10 @@ function dibujarEscena4() {
   textStyle(NORMAL);
 }
 
-// Cada 20 cuadros los fans dan un paso.
-// La mitad de las veces se acercan al jugador; la otra mitad caminan al azar.
+// Cada 16 cuadros los fans dan un paso (antes 20: ahora son un poco más rápidos).
+// El 70 % de las veces se acercan al jugador (antes 50 %); el resto caminan al azar.
 function moverFans() {
-  if (frameCount % 20 != 0) {
+  if (frameCount % 16 != 0) {
     return;
   }
   for (let fan of fans) {
@@ -1348,7 +1767,7 @@ function moverFans() {
     if (!esPared(fan.fila, fan.col + 1)) opciones.push({ fila: fan.fila, col: fan.col + 1 });
 
     let elegida;
-    if (random() < 0.5) {
+    if (random() < 0.7) {
       // perseguir: escoger la opción más cercana al jugador
       elegida = opciones[0];
       for (let op of opciones) {
@@ -1398,6 +1817,7 @@ function revisarCabina() {
 function teclaEscena4() {
   if (key == "r" || key == "R") {
     reiniciarGira();
+    empezarGira(); // con R se juega de una vez, sin pasar por la pantalla de inicio
     alarma.rate(1);
     if (!alarma.isPlaying()) {
       alarma.play(); // vuelve a sonar desde el principio
@@ -1826,7 +2246,14 @@ function mousePressed() {
   if (!audioActivado) {
     userStartAudio();
     audioActivado = true;
+    inicioEscena = millis(); // la instrucción de la consola empieza a escribirse
     iniciarMusicaEscena(1);
+    return;
+  }
+
+  // control de volumen (funciona en todas las escenas)
+  if (clicEnVolumen()) {
+    presionarVolumen();
     return;
   }
 
@@ -1846,6 +2273,8 @@ function mousePressed() {
     presionarEscena2();
   } else if (escena == 3) {
     presionarEscena3();
+  } else if (escena == 4) {
+    presionarEscena4();
   } else if (escena == 5) {
     presionarEscena5();
   } else if (escena == 6) {
@@ -1854,6 +2283,10 @@ function mousePressed() {
 }
 
 function mouseDragged() {
+  if (arrastrandoVolumen) {
+    moverVolumen();
+    return;
+  }
   if (escena == 2) {
     arrastrarEscena2();
   } else if (escena == 3) {
@@ -1862,6 +2295,10 @@ function mouseDragged() {
 }
 
 function mouseReleased() {
+  if (arrastrandoVolumen) {
+    arrastrandoVolumen = false;
+    return;
+  }
   if (escena == 2) {
     soltarEscena2();
   } else if (escena == 3) {
