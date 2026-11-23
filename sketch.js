@@ -84,6 +84,10 @@ let silenciado = false;
 let arrastrandoVolumen = false;
 let amplitudVoz;            // mide solo la voz, para mover la boca del alien
 
+// ---- VIDEO DE THE REAL RAVE ----
+const RUTA_VIDEO = "assets/videos/visuales.mp4";
+let videoRave;              // los visuales que se repiten en el fondo de la rave
+
 
 // ============================================================
 //  SETUP Y DRAW
@@ -126,7 +130,24 @@ async function setup() {
   }
   textFont(FUENTE_TEXTO); // fuente de todos los textos (los títulos la cambian)
 
+  crearVideoRave();
+
   await cargarMusica();
+}
+
+// Prepara el video de The real rave: escondido (p5 lo pone debajo del canvas
+// y nosotros lo dibujamos DENTRO del canvas con image()), en silencio y en loop.
+function crearVideoRave() {
+  videoRave = createVideo(RUTA_VIDEO);
+  videoRave.hide();          // que no aparezca el reproductor debajo de la página
+  videoRave.volume(0);       // sin sonido: la música es Acid World
+  videoRave.elt.muted = true;
+  videoRave.elt.playsInline = true; // para que en celular no se abra en pantalla completa
+}
+
+// ¿El video ya cargó y se puede dibujar?
+function videoListo() {
+  return videoRave && videoRave.elt.readyState >= 2 && videoRave.elt.videoWidth > 0;
 }
 
 // Carga todos los audios, uno por uno, mostrando el progreso en pantalla
@@ -261,22 +282,53 @@ function irAEscena(numero) {
 }
 
 // ---------- PANTALLA DE ENTRADA ----------
+// Textos de bienvenida: quiénes son 9x9 y de qué se trata la página
+const textoQuienesSon = "999999999 (se pronuncia \"nine times nine\") es un dúo de acid y hard techno de Venecia, Italia, formado en 2016 por Carlo Braidotti y Giovanni Calvani. Tocan en vivo solo con máquinas, cajas de ritmos y sintetizadores, sin computador, e improvisan cada set. Su sonido ácido viene del sintetizador 303 y del acid techno de los años 90. Con \"300000003\" (2018) se volvieron referentes de la escena, y hoy tocan en clubes y festivales de todo el mundo.";
+const textoLaPagina = "En esta página vas a recorrer su universo en seis escenas: escucha sus discos, mezcla sus sonidos, sobrevive a una gira y vive sus dos tipos de fiesta, la underground y la del festival.";
+
 function dibujarPantallaEntrada() {
   background(negro);
   noStroke();
   textAlign(CENTER, CENTER);
+
+  // título
   textFont(FUENTE_TITULOS);
   fill(verde);
   textSize(96);
-  text("999999999", ANCHO / 2, ALTO / 2 - 60);
+  text("999999999", ANCHO / 2, 105);
+
+  // subtítulo entre dos rayas
   textFont(FUENTE_TEXTO);
   fill(blanco);
-  textSize(18);
-  text("DETRÁS DE LA MÁQUINA", ANCHO / 2, ALTO / 2 + 10);
+  textStyle(BOLD);
+  textSize(16);
+  text("DETRÁS DE LA MÁQUINA", ANCHO / 2, 172);
+  textStyle(NORMAL);
+  let mitad = textWidth("DETRÁS DE LA MÁQUINA") / 2;
+  stroke(verde);
+  strokeWeight(2);
+  line(ANCHO / 2 - mitad - 15, 172, ANCHO / 2 - mitad - 70, 172);
+  line(ANCHO / 2 + mitad + 15, 172, ANCHO / 2 + mitad + 70, 172);
+  noStroke();
+
+  // quiénes son: el texto se acomoda solo en varias líneas dentro de un ancho de 700
+  let anchoTexto = 700;
+  let izquierda = ANCHO / 2 - anchoTexto / 2;
+  textAlign(CENTER, TOP);
+  textLeading(22);
+  textSize(14);
+  fill(220);
+  text(textoQuienesSon, izquierda, 212, anchoTexto);
+
+  // de qué se trata la página (en verde, para diferenciarlo)
+  fill(verde);
+  text(textoLaPagina, izquierda, 400, anchoTexto);
+
   // el texto titila para invitar a hacer clic
+  textAlign(CENTER, CENTER);
   fill(255, 150 + sin(millis() * 0.005) * 100);
   textSize(16);
-  text("Haz clic para entrar al universo  ·  sube el volumen", ANCHO / 2, ALTO / 2 + 70);
+  text("Haz clic para entrar al universo  ·  sube el volumen", ANCHO / 2, 560);
 }
 
 // ---------- MÚSICA DE CADA ESCENA ----------
@@ -298,6 +350,7 @@ function iniciarMusicaEscena(numero) {
     alarma.play();
   } else if (numero == 5) {
     cancionRave.play();
+    videoRave.loop(); // los visuales arrancan y se repiten
   } else if (numero == 6) {
     partesUltra[parteElegida].play();
   }
@@ -316,6 +369,10 @@ function detenerMusica() {
     if (s && s.isPlaying()) {
       s.stop();
     }
+  }
+  // el video se pausa cuando salimos de The real rave (así no gasta recursos)
+  if (videoRave) {
+    videoRave.pause();
   }
 }
 
@@ -1894,6 +1951,23 @@ function dibujarEscena5() {
   let agudos = agudosMusica();   // energía de los agudos (FFT)
 
   background(8);
+
+  // video de visuales en el fondo, en loop
+  if (videoListo()) {
+    // "cover": se agranda hasta llenar todo el canvas sin deformarse
+    let anchoVideo = videoRave.elt.videoWidth;
+    let altoVideo = videoRave.elt.videoHeight;
+    let escala = max(ANCHO / anchoVideo, ALTO / altoVideo);
+    imageMode(CENTER);
+    image(videoRave, ANCHO / 2, ALTO / 2, anchoVideo * escala, altoVideo * escala);
+    imageMode(CORNER);
+
+    // capa negra encima para que siga siendo una bodega oscura;
+    // con cada golpe del bajo se aclara un poco y el video "destella"
+    noStroke();
+    fill(0, 0, 0, map(pulso, 0, 1, 170, 110));
+    rect(0, 0, ANCHO, ALTO);
+  }
 
   // partículas de humo / polvo gris que titilan
   noStroke();
