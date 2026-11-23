@@ -1558,29 +1558,80 @@ function soltarEscena3() {
 //  ESCENA 4 — LA GIRA (laberinto)
 //  Flechas para moverse. Recoger los 9 pases y llegar a la cabina
 //  antes de que se acabe el tiempo. Los fans quitan 5 segundos.
+//  Tiene 3 niveles: cada uno con un laberinto más cerrado, más fans,
+//  fans más rápidos y menos tiempo.
 // ============================================================
 
 const TAM_CELDA = 40;
 const MAPA_X = 80;   // dónde empieza el laberinto en el canvas
 const MAPA_Y = 95;
-const TIEMPO_LIMITE = 40000; // 40 segundos
 
-// # = pared   . = camino   S = salida del DJ   P = pase   F = fan   C = cabina
-const mapa = [
-  "#####################",
-  "#S..#.....P.....#..P#",
-  "#.#.#.###.###.#.#.#.#",
-  "#.#...#.....#.#...#.#",
-  "#.###.#.#P#.#.###.#.#",
-  "#..P....#.#.....F...#",
-  "###.###.#.#.#####.###",
-  "#...#...#.....#.P...#",
-  "#.#.#.#####.#.#.###.#",
-  "#.#P..F.....#...#...#",
-  "#.#####.###.###.#.#.#",
-  "#P.......P..#....P#C#",
-  "#####################"
+// Cómo es cada nivel:
+//  tiempo: milisegundos para terminarlo
+//  pasoFans: cada cuántos cuadros dan un paso los fans (menos = más rápidos)
+//  persecucion: qué tan seguido van hacia el DJ (0.4 = 40 % de las veces)
+const niveles = [
+  { tiempo: 30000, pasoFans: 24, persecucion: 0.4 },  // nivel 1: fácil (30 s)
+  { tiempo: 40000, pasoFans: 20, persecucion: 0.5 },  // nivel 2: medio (40 s)
+  { tiempo: 50000, pasoFans: 16, persecucion: 0.65 }  // nivel 3: difícil (50 s)
 ];
+
+// Un laberinto por nivel
+// # = pared   . = camino   S = salida del DJ   P = pase   F = fan   C = cabina
+const mapas = [
+  // NIVEL 1: más abierto, pasillos anchos y un solo fan (mínimo 66 pasos)
+  [
+    "#####################",
+    "#S........P........P#",
+    "#.#.#.###.###.#.#.#.#",
+    "#.#...#.......#...#.#",
+    "#.###.#.#P#.#.###.#.#",
+    "#..P......#.....F...#",
+    "###.###.#...##.##.###",
+    "#...#...#.....#.P...#",
+    "#.#.#.##.##.#.#..##.#",
+    "#.#P........#...#...#",
+    "#.##.##.###..##.#.#.#",
+    "#P.......P.......P.C#",
+    "#####################"
+  ],
+  // NIVEL 2: el laberinto original, con 2 fans (mínimo 76 pasos)
+  [
+    "#####################",
+    "#S..#.....P.....#..P#",
+    "#.#.#.###.###.#.#.#.#",
+    "#.#...#.....#.#...#.#",
+    "#.###.#.#P#.#.###.#.#",
+    "#..P....#.#.....F...#",
+    "###.###.#.#.#####.###",
+    "#...#...#.....#.P...#",
+    "#.#.#.#####.#.#.###.#",
+    "#.#P..F.....#...#...#",
+    "#.#####.###.###.#.#.#",
+    "#P.......P..#....P#C#",
+    "#####################"
+  ],
+  // NIVEL 3: más cerrado, con callejones sin salida (mínimo 86 pasos)
+  [
+    "#####################",
+    "#S..#.....P..#..#..P#",
+    "#.#.#.###.###.#.#.#.#",
+    "#.#.#.#.....#.#.#.#.#",
+    "#.###.#.#P#.#.###.#.#",
+    "#..P..#.#.#.....F...#",
+    "###.###.#.#.#####.###",
+    "#...#...#...#.#.P.#.#",
+    "#.#.#.#####.#.#.###.#",
+    "#.#P..F..#..#...#...#",
+    "#.#####.###.###.#.#.#",
+    "#P...#...P..#....P#C#",
+    "#####################"
+  ]
+];
+
+let nivelGira = 1;         // nivel actual (1, 2 o 3)
+let mapa = mapas[0];    // el laberinto del nivel actual
+let TIEMPO_LIMITE = niveles[0].tiempo; // tiempo del nivel actual
 
 // ciudades y festivales escritos en los pasillos
 const ciudades = [
@@ -1595,10 +1646,20 @@ let jugador, pases, fans, cabina;
 let inicioGira = 0;
 let penalizacion = 0;            // milisegundos perdidos por los fans
 let tiempoRestante = TIEMPO_LIMITE;
-let estadoGira = "esperando";    // "esperando" (pantalla de inicio), "jugando", "ganaste" o "perdiste"
+let estadoGira = "esperando";    // "esperando", "jugando", "nivelSuperado", "ganaste" o "perdiste"
 let protegidoHasta = 0;          // después de un choque, un ratico sin chocar otra vez
 
+// Empezar La gira desde el nivel 1 (al entrar a la escena)
 function reiniciarGira() {
+  cargarNivel(1);
+  estadoGira = "esperando"; // primero sale la pantalla de "Haz click para empezar"
+}
+
+// Prepara un nivel: su laberinto, su tiempo, y dónde está cada cosa
+function cargarNivel(numero) {
+  nivelGira = numero;
+  mapa = mapas[nivelGira - 1];
+  TIEMPO_LIMITE = niveles[nivelGira - 1].tiempo;
   pases = [];
   fans = [];
   // recorrer el mapa para encontrar dónde está cada cosa
@@ -1614,7 +1675,6 @@ function reiniciarGira() {
   inicioGira = millis();
   penalizacion = 0;
   tiempoRestante = TIEMPO_LIMITE;
-  estadoGira = "esperando"; // primero sale la pantalla de "Haz click para empezar"
   protegidoHasta = 0;
 }
 
@@ -1622,11 +1682,18 @@ function reiniciarGira() {
 function empezarGira() {
   inicioGira = millis();
   estadoGira = "jugando";
+  alarma.rate(1);
+  if (!alarma.isPlaying()) {
+    alarma.play(); // por si se había callado al terminar el juego anterior
+  }
 }
 
-// Clic en La gira: si está en la pantalla de inicio, empieza el juego
+// Clic en La gira: empieza el juego, o pasa al siguiente nivel
 function presionarEscena4() {
   if (estadoGira == "esperando") {
+    empezarGira();
+  } else if (estadoGira == "nivelSuperado") {
+    cargarNivel(nivelGira + 1);
     empezarGira();
   }
 }
@@ -1669,7 +1736,9 @@ function dibujarEscena4() {
   // "Alarm 303" se acelera mientras se acaba el tiempo (de velocidad 1 a 1.4)
   if (estadoGira == "jugando") {
     alarma.rate(map(urgencia, 0, 1, 1, 1.4));
-  } else if (estadoGira != "esperando" && alarma.isPlaying()) {
+  } else if (estadoGira == "esperando" || estadoGira == "nivelSuperado") {
+    alarma.rate(1); // entre niveles vuelve a su velocidad normal
+  } else if (alarma.isPlaying()) {
     alarma.stop(); // cuando el juego termina, la alarma se calla
   }
 
@@ -1693,7 +1762,10 @@ function dibujarEscena4() {
   textStyle(BOLD);
   textSize(11);
   for (let ciudad of ciudades) {
-    text(ciudad.texto, centroX(ciudad.col), centroY(ciudad.fila));
+    // en algunos niveles esa casilla es pared: ahí no se escribe
+    if (!esPared(ciudad.fila, ciudad.col)) {
+      text(ciudad.texto, centroX(ciudad.col), centroY(ciudad.fila));
+    }
   }
 
   // cabina
@@ -1759,7 +1831,7 @@ function dibujarEscena4() {
     noStroke();
   }
 
-  // cronómetro y contador de pases (aparecen cuando empieza el juego)
+  // cronómetro, pases y nivel (aparecen cuando empieza el juego)
   if (estadoGira != "esperando") {
     noStroke();
     fill(blanco);
@@ -1767,6 +1839,9 @@ function dibujarEscena4() {
     textSize(18);
     text("TIEMPO: " + ceil(tiempoRestante / 1000), ANCHO - 40, 25);
     text("PASES: " + contarPases() + " / 9", ANCHO - 40, 50);
+    fill(verde);
+    textSize(14);
+    text("NIVEL " + nivelGira + " / " + niveles.length, ANCHO - 40, 75);
   }
 
   // pantalla de inicio: grande "Haz click para empezar" y las instrucciones abajo
@@ -1775,8 +1850,15 @@ function dibujarEscena4() {
     fill(0, 0, 0, 215);
     rect(MAPA_X, MAPA_Y, mapa[0].length * TAM_CELDA, mapa.length * TAM_CELDA);
 
-    // texto grande que late suave para invitar a hacer clic
+    // nivel en el que empieza
     textAlign(CENTER, CENTER);
+    fill(blanco);
+    textStyle(BOLD);
+    textSize(16);
+    text("NIVEL 1 DE " + niveles.length, ANCHO / 2, ALTO / 2 - 75);
+    textStyle(NORMAL);
+
+    // texto grande que late suave para invitar a hacer clic
     textFont(FUENTE_TITULOS);
     textSize(54 + sin(millis() * 0.004) * 2);
     fill(negro);
@@ -1789,6 +1871,29 @@ function dibujarEscena4() {
     dibujarInstruccion("Muévete con las flechas: recoge los 9 pases y llega a la cabina del DJ antes de que se acabe el tiempo", ANCHO / 2, ALTO / 2 + 45);
   }
 
+  // pantalla entre niveles: ¡nivel superado! y clic para el siguiente
+  if (estadoGira == "nivelSuperado") {
+    noStroke();
+    fill(0, 0, 0, 200);
+    rect(MAPA_X, MAPA_Y, mapa[0].length * TAM_CELDA, mapa.length * TAM_CELDA);
+    textAlign(CENTER, CENTER);
+    textFont(FUENTE_TITULOS);
+    textSize(48);
+    fill(verde);
+    text("¡NIVEL " + nivelGira + " SUPERADO!", ANCHO / 2, ALTO / 2 - 25);
+    textFont(FUENTE_TEXTO);
+    fill(255, 150 + sin(millis() * 0.005) * 100); // titila para invitar a hacer clic
+    textSize(18);
+    text("Haz click para pasar al nivel " + (nivelGira + 1), ANCHO / 2, ALTO / 2 + 30);
+    fill(blanco);
+    textSize(13);
+    if (nivelGira + 1 == niveles.length) {
+      text("Último nivel: laberinto más cerrado y fans más rápidos", ANCHO / 2, ALTO / 2 + 62);
+    } else {
+      text("Ahora hay más fans y son más rápidos", ANCHO / 2, ALTO / 2 + 62);
+    }
+  }
+
   // pantalla de final
   if (estadoGira == "ganaste" || estadoGira == "perdiste") {
     fill(0, 0, 0, 200);
@@ -1798,22 +1903,29 @@ function dibujarEscena4() {
     if (estadoGira == "ganaste") {
       fill(verde);
       text("¡LLEGASTE A LA CABINA!", ANCHO / 2, ALTO / 2 - 20);
+      fill(blanco);
+      textStyle(NORMAL);
+      textSize(18);
+      text("Superaste los " + niveles.length + " niveles  ·  presiona R para jugar otra vez", ANCHO / 2, ALTO / 2 + 30);
     } else {
       fill(rojo);
       text("SE ACABÓ EL TIEMPO", ANCHO / 2, ALTO / 2 - 20);
+      fill(blanco);
+      textStyle(NORMAL);
+      textSize(18);
+      text("Presiona R para intentar otra vez el nivel " + nivelGira, ANCHO / 2, ALTO / 2 + 30);
     }
-    fill(blanco);
-    textStyle(NORMAL);
-    textSize(18);
-    text("Presiona R para jugar otra vez", ANCHO / 2, ALTO / 2 + 30);
   }
   textStyle(NORMAL);
 }
 
-// Cada 16 cuadros los fans dan un paso (antes 20: ahora son un poco más rápidos).
-// El 70 % de las veces se acercan al jugador (antes 50 %); el resto caminan al azar.
+// Los fans dan un paso cada cierto número de cuadros, según el nivel
+// (24 en el nivel 1, 20 en el 2 y 16 en el 3).
+// Según el nivel, el 40 %, 50 % o 65 % de las veces se acercan al jugador;
+// el resto caminan al azar.
 function moverFans() {
-  if (frameCount % 16 != 0) {
+  let config = niveles[nivelGira - 1];
+  if (frameCount % config.pasoFans != 0) {
     return;
   }
   for (let fan of fans) {
@@ -1824,7 +1936,7 @@ function moverFans() {
     if (!esPared(fan.fila, fan.col + 1)) opciones.push({ fila: fan.fila, col: fan.col + 1 });
 
     let elegida;
-    if (random() < 0.7) {
+    if (random() < config.persecucion) {
       // perseguir: escoger la opción más cercana al jugador
       elegida = opciones[0];
       for (let op of opciones) {
@@ -1867,18 +1979,22 @@ function revisarPases() {
 
 function revisarCabina() {
   if (jugador.fila == cabina.fila && jugador.col == cabina.col && contarPases() == pases.length) {
-    estadoGira = "ganaste";
+    if (nivelGira < niveles.length) {
+      estadoGira = "nivelSuperado"; // todavía quedan niveles
+    } else {
+      estadoGira = "ganaste";       // terminó el último nivel
+    }
   }
 }
 
 function teclaEscena4() {
   if (key == "r" || key == "R") {
-    reiniciarGira();
-    empezarGira(); // con R se juega de una vez, sin pasar por la pantalla de inicio
-    alarma.rate(1);
-    if (!alarma.isPlaying()) {
-      alarma.play(); // vuelve a sonar desde el principio
+    if (estadoGira == "ganaste") {
+      cargarNivel(1);     // si ya ganó los 3 niveles, vuelve a empezar desde el 1
+    } else {
+      cargarNivel(nivelGira); // si no, repite el nivel en el que va
     }
+    empezarGira(); // con R se juega de una vez, sin pasar por la pantalla de inicio
     return;
   }
   if (estadoGira != "jugando") {
