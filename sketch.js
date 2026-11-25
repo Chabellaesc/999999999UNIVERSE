@@ -1,7 +1,11 @@
 /*
- * 999999999 — DETRÁS DE LA MÁQUINA
- * Esqueleto del universo musical interactivo (entrega de avances)
- * Isabella Escobar — Pensamiento Algorítmico
+ * 999999999 — DETRÁS DE LA MÁQUINA 
+Isabella Escobar — Pensamiento Algorítmico
+ * 999999999 (se pronuncia "nine times nine" o 9x9) es un dúo italiano de acid y hard techno,
+ * originario de Venecia, que empezó en julio de 2016. Son conocidos por sus sets en vivo hechos 
+ * solo con hardware (cajas de ritmo y sintetizadores, sin computador), por el sonido ácido del 
+ * sintetizador 303 y por su propio sello, NineTimesNine. Su canción "300000003" (2018) fue la que 
+ * los dio a conocer en todo el mundo.
  *
  * ESCENAS:
  *  0: separador  → pantalla corta de transición entre escenas
@@ -27,10 +31,7 @@
  *    pantalla de entrada que activa el audio con userStartAudio().
  */
 
-// ============================================================
 //  CONFIGURACIÓN GENERAL
-// ============================================================
-
 const ANCHO = 1000;
 const ALTO = 650;
 const BPM = 130; // velocidad de La mezcla: todos los stems se ajustan a esta
@@ -65,13 +66,14 @@ let agudos = 0;
 let nivel = 0;
 let promedioBajos = -100; // promedio lento de los bajos, para detectar los golpes
 
-// Sensibilidad: si algo salta muy poco, baja este número; si salta demasiado, súbelo
+// Sensibilidad: si algo salta muy poco el número es más bajo; si salta demasiado es más alto
 const SENSIBILIDAD_BAJOS = 6;
 
-// ---- FUENTES ----
-// Se cargan desde Google Fonts con un <link> en index.html.
-// Títulos: stencil industrial (como las letras pintadas en cajas y bodegas).
-// Textos: monoespaciada, como las pantallas de las máquinas.
+/* ---- FUENTES ----
+Se cargan desde Google Fonts con un <link> en index.html.
+Títulos: stencil industrial (como las letras pintadas en cajas y bodegas).
+Textos: monoespaciada, como las pantallas de las máquinas.
+*/ 
 const FUENTE_TITULOS = "Saira Stencil One";
 const FUENTE_TEXTO = "Space Mono";
 
@@ -88,11 +90,7 @@ let amplitudVoz;            // mide solo la voz, para mover la boca del alien
 const RUTA_VIDEO = "assets/videos/visuales.mp4";
 let videoRave;              // los visuales que se repiten en el fondo de la rave
 
-
-// ============================================================
 //  SETUP Y DRAW
-// ============================================================
-
 async function setup() {
   createCanvas(ANCHO, ALTO);
 
